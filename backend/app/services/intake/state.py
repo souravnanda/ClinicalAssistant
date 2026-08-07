@@ -1,7 +1,6 @@
 """
 FILE: backend/app/services/intake/state.py
-PURPOSE: Session state machine manager for clinical intake workflow.
-WHY WE NEED IT: Merges newly extracted slots into persistent session memory, tracks workflow step progression, and handles intake completion state.
+PURPOSE: Session state machine manager ensuring demographic completeness, slot merging, and monotonic step progression.
 """
 
 from typing import Tuple, List, Optional
@@ -10,7 +9,7 @@ from app.services.intake.extractor import extract_slots_from_turn
 
 
 def merge_slots(current_state: IntakeSessionState, extraction: ExtractionResult) -> IntakeSessionState:
-    """Merges non-null extracted slot values into current session state memory."""
+    """PURPOSE: Safely merges non-null extracted slot values into persistent session memory."""
     # Merge demographics
     for field, value in extraction.demographics.model_dump(exclude_unset=True).items():
         if value is not None:
@@ -34,50 +33,41 @@ def merge_slots(current_state: IntakeSessionState, extraction: ExtractionResult)
 
 
 def calculate_current_step(state: IntakeSessionState) -> int:
-    """Calculates current intake workflow step (1 through 5) based on filled slots."""
+    """PURPOSE: Calculates current intake workflow step (1 through 5) based on filled slots, ensuring monotonic progression."""
     demo = state.demographics
     slots = state.clinical_slots
 
-    # Step 1: Demographics & Chief Complaint
-    if not (demo.name and slots.chief_complaint):
-        return 1
-    # Step 2: Onset & Severity Details
-    if not (slots.onset_duration and slots.severity):
-        return 2
-    # Step 3: Interventions & Current Medications
-    if not slots.current_medications:
-        return 3
-    # Step 4: Doctor Questions & Goals
-    if not slots.doctor_questions:
-        return 4
-    # Step 5: Brief Generation / Completed
-    return 5
+    calculated_step = 1
+
+    # Step 1 Complete: Demographics (Name, Age, Gender, Height, Weight, Contact) + Chief Complaint
+    if demo.name and demo.age and demo.gender and demo.height and demo.weight and demo.contact and slots.chief_complaint:
+        calculated_step = 2
+        # Step 2 Complete: Onset & Severity Details
+        if slots.onset_duration and slots.severity:
+            calculated_step = 3
+            # Step 3 Complete: Interventions & Medications
+            if slots.current_medications:
+                calculated_step = 4
+                # Step 4 Complete: Doctor Questions
+                if slots.doctor_questions:
+                    calculated_step = 5
+
+    # Enforce Monotonicity (Step tracker cannot regress)
+    return max(state.current_step, calculated_step)
 
 
 def process_user_turn(
     user_message: str,
     current_state: IntakeSessionState
 ) -> Tuple[IntakeSessionState, str, Optional[List[str]]]:
-    """
-    PURPOSE: Processes a single user message turn, updates state memory, and returns follow-up actions.
-    
-    ARGS:
-        user_message (str): Patient's natural language input.
-        current_state (IntakeSessionState): Current persistent session state.
-        
-    RETURNS:
-        Tuple[IntakeSessionState, str, Optional[List[str]]]:
-            - Updated session state object
-            - Next targeted follow-up question
-            - Quick-reply options list for UI
-    """
+    """PURPOSE: Orchestrates conversation turn, merges state, checks workflow completion, and generates Doctor Brief."""
     # 1. Append user message to conversation history
     current_state.conversation_history.append({
         "role": "user",
         "content": user_message
     })
 
-    # 2. Extract slots via LLM Structured Output Extractor
+    # 2. Extract slots via LLM Extractor
     extraction: ExtractionResult = extract_slots_from_turn(
         user_message=user_message,
         current_state=current_state
@@ -86,7 +76,7 @@ def process_user_turn(
     # 3. Merge newly extracted slots into persistent session state
     updated_state = merge_slots(current_state, extraction)
 
-    # 4. Update workflow progress step
+    # 4. Update workflow progress step safely
     updated_state.current_step = calculate_current_step(updated_state)
 
     # 5. Handle completion check and brief generation
@@ -96,7 +86,9 @@ def process_user_turn(
         updated_state.summary_brief = (
             f"# CLINICAL PREP BRIEF\n"
             f"**Patient Name:** {updated_state.demographics.name or 'N/A'}\n"
-            f"**Age:** {updated_state.demographics.age or 'N/A'} | **Gender:** {updated_state.demographics.gender or 'N/A'}\n\n"
+            f"**Age:** {updated_state.demographics.age or 'N/A'} | **Gender:** {updated_state.demographics.gender or 'N/A'}\n"
+            f"**Height:** {updated_state.demographics.height or 'N/A'} | **Weight:** {updated_state.demographics.weight or 'N/A'}\n"
+            f"**Contact:** {updated_state.demographics.contact or 'N/A'}\n\n"
             f"### CLINICAL DETAILS\n"
             f"- **Chief Complaint:** {updated_state.clinical_slots.chief_complaint or 'N/A'}\n"
             f"- **Onset / Duration:** {updated_state.clinical_slots.onset_duration or 'N/A'}\n"

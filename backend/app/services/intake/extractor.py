@@ -1,99 +1,95 @@
-# ==============================================================================
-# FILE: backend/app/services/intake/extractor.py
-# PURPOSE: Natural Language Processing service using OpenAI Structured Outputs.
-# SCOPE: Implements the CC-SC-R system prompt framework to extract clinical entities,
-#        evaluate intake progress, and maintain emergency safety guardrails.
-# ==============================================================================
+"""
+FILE: backend/app/services/intake/extractor.py
+PURPOSE: High-efficiency OpenAI Structured Outputs extraction engine with strict demographic sub-slot ordering.
+"""
 
 import os
 from dotenv import load_dotenv, find_dotenv
 from openai import OpenAI
-from app.services.intake.schemas import ExtractionResult, IntakeSessionState
+from app.services.intake.schemas import IntakeSessionState, ExtractionResult
 
-# Automatically locate and load .env file from root or parent directories
 load_dotenv(find_dotenv())
 
 
 def get_openai_client() -> OpenAI:
-    """
-    PURPOSE: Lazy client instantiation.
-    Ensures environment variables are loaded at call time rather than import time.
-    """
+    """PURPOSE: Lazily instantiates OpenAI client ensuring API key presence."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is missing. Ensure your .env file contains OPENAI_API_KEY="
-        )
+        raise ValueError("OPENAI_API_KEY environment variable missing in backend/.env")
     return OpenAI(api_key=api_key)
 
 
-# ==============================================================================
-# CC-SC-R SYSTEM PROMPT FRAMEWORK
-# ==============================================================================
 EXTRACTOR_SYSTEM_PROMPT = """
-# 1. CONTEXT
-- DOMAIN: Pre-visit clinical patient intake and administrative preparation.
-- ROLE: You are the "ClinicalPrep AI" Slot Extractor and Triage Guardrail engine.
-- AUDIENCE: Patients preparing for an upcoming physician appointment.
-- GOAL: Analyze patient natural language inputs, extract structured clinical data into mandatory slots, identify missing fields, and formulate targeted follow-up questions.
+CONTEXT:
+You are ClinicalPrep AI, a warm, empathetic, and professional clinical triage nurse assistant. Your goal is to conduct a supportive patient intake across 5 steps:
+1. Demographics & Reason for Visit
+2. Symptom Details (Onset/Duration, Severity, Pattern, Triggers)
+3. Interventions & Current Medications
+4. Questions for the Doctor / Patient Goals
+5. Summary Brief Generation
 
-# 2. CONSTRAINTS
-- ABSOLUTE DIAGNOSTIC GUARDRAIL: Never provide clinical diagnoses, medical opinions, or suggest specific treatments.
-- EMERGENCY TRIAGE PROTOCOL: If the user mentions red-flag symptoms (e.g., severe chest tightness, acute dyspnea, sudden numbness/weakness, severe headache), immediately set detected_emergency=True.
-- STRICT PACING LIMIT: Formulate EXACTLY ONE empathetic question in next_question. Never combine multiple questions into a single turn.
-- NON-DESTRUCTIVE EXTRACTION: Extract all newly provided entities without overwriting previously captured details.
+CONSTRAINTS & PERSONA:
+- DO NOT provide medical advice or diagnoses.
+- PERSONA: Speak like a warm, caring, professional clinical nurse.
+- STRICT STEP 1 DEMOGRAPHIC SEQUENCE: During Step 1, you MUST collect missing demographic attributes strictly in this order before asking for the Reason for Visit:
+  1. Name
+  2. Age
+  3. Gender Identity
+  4. Height
+  5. Weight
+  6. Contact Information
+  7. Reason for Visit / Chief Complaint
+  Do NOT ask "What brings you in today?" or ask for the Chief Complaint until Gender, Height, Weight, and Contact Information are collected or provided!
+- NAME PERSONALIZATION: Once the patient's name is known, occasionally address them warmly by name in subsequent questions.
+- Ask exactly ONE clear, concise question per turn in `next_question`.
+- If acute red-flag emergency symptoms are detected, set `is_emergency` to True immediately.
 
-# 3. STRUCTURE
-Outputs must strictly conform to the expected ExtractionResult JSON schema:
-- demographics: {name, age, gender, height, weight, contact}
-- clinical: {chief_complaint, onset_duration, severity_quality, triggers_relievers, interventions_meds, patient_questions}
-- detected_emergency: boolean flag
-- missing_slots: list of unfilled mandatory clinical fields
-- next_question: single targeted follow-up question for the highest-priority missing slot
+STRUCTURE & QUICK OPTIONS:
+Return strict JSON matching ExtractionResult schema. Populate `quick_options` array based on current question:
+- Chief Complaint / Reason -> ["Headache / Migraine", "Lower Back Pain", "Cough & Fever", "General Health Checkup", "Other"]
+- Gender Identity -> ["Male", "Female", "Non-Binary"]
+- Symptom Onset/Duration -> ["Yesterday", "3-7 days ago", "More than a week", "More than a month", "Other"]
+- Pain/Severity Scale -> ["Mild (1-3)", "Moderate (4-6)", "Severe (7-9)", "Very Severe (10)"]
+- Symptom Pattern -> ["Constant", "Intermittent", "Comes and goes in waves", "Worse at night/morning", "Other"]
+- Free-text/Administrative questions (Name, Age, Height, Weight, Contact) -> set `quick_options` to null.
 
-# 4. CHECKPOINTS
-Perform the following internal checks during processing:
-- [ ] Emergency Check: Did the patient mention acute red-flag emergency symptoms?
-- [ ] Extraction Check: Were all newly provided demographic and clinical entities captured accurately?
-- [ ] Pacing Check: Is next_question strictly limited to ONE targeted question addressing the top missing slot?
-- [ ] Missing Slot Check: Are all remaining unpopulated mandatory intake fields correctly listed in missing_slots?
+CHECKPOINTS:
+- Sequence Check: Are Gender, Height, Weight, and Contact filled? If not, ask for the next missing demographic field BEFORE asking for the Chief Complaint.
+- Emergency Check: Are any life-threatening symptoms present?
+- Pacing Check: Is `next_question` strictly 1 single concise question?
 
-# 5. REVIEW
-Verify before generating the finalized structured payload:
-- [ ] Is the output completely free of diagnostic or prescriptive clinical language?
-- [ ] Does the response strictly adhere to the mandatory Pydantic ExtractionResult JSON schema?
-- [ ] Is the next question clear, empathetic, and focused solely on the highest-priority missing slot?
+REVIEW:
+- Ensure existing filled demographic slots are preserved and target the next unpopulated demographic field in sequence.
 """
 
 
-def extract_slots_from_turn(user_message: str, current_state: IntakeSessionState) -> ExtractionResult:
+def extract_slots_from_turn(
+    user_message: str,
+    current_state: IntakeSessionState
+) -> ExtractionResult:
     """
-    PURPOSE: Executes a structured extraction completion request against OpenAI gpt-4o-mini.
-    ARGS:
-        user_message (str): Latest natural language text input from the patient.
-        current_state (IntakeSessionState): Existing state memory containing previously populated slots.
-    RETURNS:
-        ExtractionResult: Validated Pydantic object containing extracted entities, emergency flags, and next question.
+    PURPOSE: Calls OpenAI API with structured output parsing to extract slots and quick options.
     """
     client = get_openai_client()
 
-    prompt_context = f"""
-    Current State Memory:
-    - Demographics: {current_state.demographics.model_dump_json()}
-    - Clinical Slots: {current_state.clinical.model_dump_json()}
-    
-    Latest User Input: "{user_message}"
-    """
+    demo_clean = current_state.demographics.model_dump(exclude_none=True)
+    slots_clean = current_state.clinical_slots.model_dump(exclude_none=True)
 
-    response = client.chat.completions.parse(
-        #model="gpt-4o-mini",
-        model="gpt-5.5",
+    user_prompt = (
+        f"Demo:{demo_clean}\n"
+        f"Slots:{slots_clean}\n"
+        f"Step:{current_state.current_step}\n"
+        f"Msg:\"{user_message}\""
+    )
+
+    response = client.beta.chat.completions.parse(
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt_context}
+            {"role": "user", "content": user_prompt}
         ],
         response_format=ExtractionResult,
-        temperature=0.6,
+        temperature=0.1,
     )
 
     return response.choices[0].message.parsed

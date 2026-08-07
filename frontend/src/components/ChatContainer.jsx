@@ -3,9 +3,10 @@
  * Chat Container UI Component for ClinicalPrep AI v2.0.
  * 
  * Purpose:
- *   Handles active chat message history display, microphone recording controls,
- *   VibeVoice/Whisper Speech-to-Text transcription triggers, and dynamic 
- *   Text-to-Speech audio auto-playback for assistant responses.
+ *   Serves as the primary conversation interface. Manages chat message streams, 
+ *   browser microphone audio recording via `useAudioRecorder`, automatic 
+ *   Speech-to-Text (STT) transcription, and Text-to-Speech (TTS) audio playback 
+ *   for assistant responses.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -13,7 +14,7 @@ import { Mic, Send, Volume2, Square, Loader2, AlertCircle } from 'lucide-react';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { transcribeAudio, synthesizeSpeech } from '../services/api';
 
-export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
+export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
   const [inputText, setInputText] = useState('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -21,7 +22,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
   const messagesEndRef = useRef(null);
   const audioPlayerRef = useRef(null);
 
-  // Initialize custom Web Audio MediaRecorder hook
+  // Initialize custom Web Audio API recorder hook
   const {
     isRecording,
     recordingTime,
@@ -32,18 +33,18 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
     clearAudio,
   } = useAudioRecorder();
 
-  // Auto-scroll chat window to bottom on new messages
+  // Scroll to bottom of chat feed on new message or loading state update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading, isTranscribing]);
 
-  // Effect: Process recorded audio blob whenever user stops recording
+  // Effect: Process recorded audio blob when user stops microphone recording
   useEffect(() => {
     const processRecordedAudio = async () => {
       if (audioBlob) {
         setIsTranscribing(true);
         try {
-          // Send WebM audio blob to backend STT endpoint
+          // Post captured WebM audio blob to backend STT endpoint
           const data = await transcribeAudio(audioBlob);
           if (data.transcript && data.transcript.trim()) {
             await onSendMessage(data.transcript.trim());
@@ -60,8 +61,16 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
     processRecordedAudio();
   }, [audioBlob, onSendMessage, clearAudio]);
 
+  // Effect: Automatically play assistant response audio upon receiving new message
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === 'assistant' && !isLoading && !isTranscribing) {
+      handlePlayTTS(lastMessage.content);
+    }
+  }, [messages, isLoading, isTranscribing]);
+
   /**
-   * Synthesizes and plays back assistant text via backend TTS endpoint.
+   * Synthesizes text prompt into audio via backend TTS service and starts playback.
    */
   const handlePlayTTS = async (textToSpeak) => {
     try {
@@ -85,18 +94,18 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
   };
 
   /**
-   * Handles text input form submission.
+   * Submits typed text input to the intake processor.
    */
   const handleSubmitText = (e) => {
     e.preventDefault();
-    if (inputText.trim() && !isLoading) {
+    if (inputText.trim() && !isLoading && !isTranscribing) {
       onSendMessage(inputText.trim());
       setInputText('');
     }
   };
 
   /**
-   * Formats recording elapsed seconds to MM:SS display.
+   * Formats recording duration from seconds to MM:SS format.
    */
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -106,7 +115,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
 
   return (
     <div className="flex flex-col h-full max-w-4xl mx-auto bg-white rounded-xl shadow-md overflow-hidden border border-slate-200">
-      {/* Hidden Audio Element for Web Speech Playback */}
+      {/* Hidden Audio Element for Web Speech Streaming Playback */}
       <audio
         ref={audioPlayerRef}
         onEnded={() => setIsPlayingAudio(false)}
@@ -114,7 +123,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
         className="hidden"
       />
 
-      {/* Chat Messages Stream */}
+      {/* Chat Conversation Feed */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg, index) => {
           const isUser = msg.role === 'user';
@@ -132,12 +141,12 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
               >
                 <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-                {/* Read Aloud Trigger for Assistant Replies */}
+                {/* Assistant Speech Manual Playback Trigger */}
                 {!isUser && (
                   <button
                     onClick={() => handlePlayTTS(msg.content)}
                     className="mt-2 text-slate-500 hover:text-amber-800 transition-colors flex items-center gap-1 text-xs font-medium"
-                    title="Listen to response"
+                    title="Read Aloud"
                   >
                     <Volume2 className="w-3.5 h-3.5" />
                     <span>Read Aloud</span>
@@ -151,7 +160,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
           );
         })}
 
-        {/* State Loading Indicators */}
+        {/* Slot Analysis State Indicator */}
         {isLoading && (
           <div className="flex items-center gap-2 text-slate-500 text-xs italic p-2">
             <Loader2 className="w-4 h-4 animate-spin text-amber-800" />
@@ -159,6 +168,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
           </div>
         )}
 
+        {/* Speech-to-Text Processing State Indicator */}
         {isTranscribing && (
           <div className="flex items-center gap-2 text-amber-800 text-xs font-medium p-2 bg-amber-50 rounded-lg border border-amber-200">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -169,7 +179,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Hardware / Permission Error Bar */}
+      {/* Hardware / Permission Error Display */}
       {micError && (
         <div className="bg-red-50 text-red-600 text-xs p-2.5 px-4 border-t border-red-200 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -177,11 +187,11 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
         </div>
       )}
 
-      {/* Input Control Bar */}
+      {/* Input Action Controls Bar */}
       <div className="p-3 bg-slate-50 border-t border-slate-200">
         <form onSubmit={handleSubmitText} className="flex items-center gap-2">
           {isRecording ? (
-            /* Recording Active Bar */
+            /* Active Microphone Recording Banner */
             <div className="flex-1 flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-red-700 animate-pulse">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
@@ -199,7 +209,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
             </div>
           ) : (
             <>
-              {/* Voice Record Toggle Button */}
+              {/* Microphone Record Button */}
               <button
                 type="button"
                 onClick={startRecording}
@@ -210,7 +220,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
                 <Mic className="w-5 h-5 text-slate-700" />
               </button>
 
-              {/* Text Input Control */}
+              {/* Text Message Input Field */}
               <input
                 type="text"
                 value={inputText}
@@ -220,7 +230,7 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
                 className="flex-1 bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-800 focus:border-transparent disabled:opacity-50"
               />
 
-              {/* Send Button */}
+              {/* Submit Message Button */}
               <button
                 type="submit"
                 disabled={!inputText.trim() || isLoading || isTranscribing}
@@ -235,4 +245,6 @@ export const ChatContainer = ({ messages, onSendMessage, isLoading }) => {
     </div>
   );
 };
+
+// Provides default export fallback to resolve import mismatches in App.jsx
 export default ChatContainer;

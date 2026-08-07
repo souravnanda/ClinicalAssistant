@@ -2,8 +2,8 @@
 """
 Audio Processing Service Layer for ClinicalPrep AI v2.0.
 
-Provides Speech-to-Text (STT) transcription using a local lightweight Hugging Face 
-Whisper pipeline with fallback to OpenAI's hosted Whisper API, and Text-to-Speech (TTS) synthesis.
+Provides Speech-to-Text (STT) transcription using OpenAI Whisper API / local pipeline 
+and Text-to-Speech (TTS) voice synthesis.
 """
 
 import os
@@ -13,10 +13,7 @@ from typing import Dict, Any
 import torch
 from transformers import pipeline
 
-# Automatically detect CUDA GPU availability for faster local processing
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Default to lightweight 150MB model to avoid large cache downloads and timeouts
 MODEL_ID = os.getenv("VIBEVOICE_MODEL_PATH", "openai/whisper-tiny")
 
 vibevoice_asr_pipeline = None
@@ -28,10 +25,9 @@ try:
         device=device,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32
     )
-    print(f"✅ STT Speech Recognition Pipeline loaded successfully with model: {MODEL_ID}")
+    print(f"✅ Local STT Speech Recognition Pipeline loaded with model: {MODEL_ID}")
 except Exception as e:
-    print(f"⚠️ Warning: Could not initialize local STT pipeline for '{MODEL_ID}': {e}")
-    print("ℹ️ System will attempt fallback to OpenAI API for transcription requests.")
+    print(f"⚠️ Warning: Local STT pipeline init skipped: {e}")
 
 
 async def transcribe_audio_with_vibevoice(
@@ -40,9 +36,37 @@ async def transcribe_audio_with_vibevoice(
 ) -> Dict[str, Any]:
     """
     Transcribes raw WebM/WAV audio binary data into clinical text.
-    Uses local Hugging Face Whisper pipeline first, falling back to OpenAI API if necessary.
+    First attempts local pipeline, falling back directly to OpenAI Whisper API.
     """
-    # 1. Primary Path: Local Hugging Face Pipeline
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    # 1. Primary Cloud Path (Fast & Resilient to WebM formats without FFmpeg issues)
+    if api_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            
+            audio_file = BytesIO(audio_bytes)
+            audio_file.name = filename or "patient_recording.webm"
+
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="en"
+            )
+            
+            transcript_text = transcript.text.strip()
+            print(f"🎙️ Transcribed Speech: '{transcript_text}'")
+            
+            return {
+                "transcript": transcript_text,
+                "segments": [],
+                "engine": "OpenAI Hosted Whisper API (whisper-1)"
+            }
+        except Exception as api_err:
+            print(f"⚠️ OpenAI API Transcription error: {api_err}. Trying local model...")
+
+    # 2. Local Model Fallback
     if vibevoice_asr_pipeline is not None:
         suffix = f".{filename.split('.')[-1]}" if "." in filename else ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -64,27 +88,7 @@ async def transcribe_audio_with_vibevoice(
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    # 2. Fallback Path: OpenAI Hosted Whisper API
-    api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        
-        audio_file = BytesIO(audio_bytes)
-        audio_file.name = filename or "audio.webm"
-
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            language="en"
-        )
-        return {
-            "transcript": transcript.text.strip(),
-            "segments": [],
-            "engine": "OpenAI Hosted Whisper API (whisper-1)"
-        }
-
-    raise RuntimeError("No active STT engine available. Local model failed to load and OPENAI_API_KEY is missing.")
+    raise RuntimeError("No active STT engine available. Check OPENAI_API_KEY or FFmpeg local install.")
 
 
 async def synthesize_speech_stream(text_prompt: str) -> bytes:

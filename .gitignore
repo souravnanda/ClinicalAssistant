@@ -1,23 +1,21 @@
-# Environment & Secrets
-.env
-.env.*
-*.env
-.streamlit/secrets.toml
-
-
-# Python Cache & Environments
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
+# Virtual Environments
 venv/
+backend/venv/
+env/
 ENV/
 
-# Output Test Artifacts
-*.pdf
-tests/*.pdf
+# Python Cache & Build Artifacts
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
 
-# IDE Configs
+# Environment Secrets
+.env
+*.env
+
+# IDE / VS Code
 .vscode/
-.idea/
-.DS_Store
+.devcontainer/
+*.code-workspace

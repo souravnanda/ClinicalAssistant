@@ -14,8 +14,16 @@ ENV/
 # Environment Secrets
 .env
 *.env
+frontend/.env
 
 # IDE / VS Code
 .vscode/
 .devcontainer/
 *.code-workspace
+
+# Node Dependencies & Build Artifacts (Added)
+node_modules/
+**/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local

@@ -86,7 +86,8 @@ def extract_slots_from_turn(user_message: str, current_state: IntakeSessionState
     """
 
     response = client.chat.completions.parse(
-        model="gpt-4o-mini",
+        #model="gpt-4o-mini",
+        model="gpt-5.5",
         messages=[
             {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
             {"role": "user", "content": prompt_context}

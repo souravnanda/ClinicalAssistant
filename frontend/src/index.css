@@ -1,0 +1,15 @@
+/**
+ * FILE: frontend/src/index.css
+ * PURPOSE: Global stylesheet loading Tailwind base, component, and utility layers.
+ * WHY WE NEED IT: Applies global CSS rules, default typography, and background colors (#FFF8F0) to prevent theme flickering.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#FFF8F0] text-[#38240D] antialiased min-h-screen font-sans;
+  }
+}

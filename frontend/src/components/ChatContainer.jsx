@@ -3,26 +3,34 @@
  * Chat Container UI Component for ClinicalPrep AI v2.0.
  * 
  * Purpose:
- *   Serves as the primary conversation interface. Manages chat message streams, 
- *   browser microphone audio recording via `useAudioRecorder`, automatic 
- *   Speech-to-Text (STT) transcription, and Text-to-Speech (TTS) audio playback 
- *   for assistant responses.
+ *   Serves as the primary conversation interface. Manages auto-scrolling message streams, 
+ *   browser microphone audio recording via `useAudioRecorder`, automated Speech-to-Text (STT) 
+ *   transcription, and automatic Text-to-Speech (TTS) voice playback for assistant responses.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, Send, Volume2, Square, Loader2, AlertCircle } from 'lucide-react';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { transcribeAudio, synthesizeSpeech } from '../services/api';
 
-export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
+export const ChatContainer = ({
+  messages = [],
+  onSendMessage,
+  handleSendMessage,
+  isLoading
+}) => {
+  // Guard clause resolving prop name variations
+  const sendMessageHandler = onSendMessage || handleSendMessage;
+
   const [inputText, setInputText] = useState('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
   const messagesEndRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  const lastSpokenMessageRef = useRef(null); // Ref to prevent infinite TTS re-synthesis loops
 
-  // Initialize custom Web Audio API recorder hook
+  // Initialize Web Audio API recorder hook
   const {
     isRecording,
     recordingTime,
@@ -33,46 +41,17 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
     clearAudio,
   } = useAudioRecorder();
 
-  // Scroll to bottom of chat feed on new message or loading state update
+  // Auto-scroll chat feed to bottom on new messages or loading state changes
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading, isTranscribing]);
 
-  // Effect: Process recorded audio blob when user stops microphone recording
-  useEffect(() => {
-    const processRecordedAudio = async () => {
-      if (audioBlob) {
-        setIsTranscribing(true);
-        try {
-          // Post captured WebM audio blob to backend STT endpoint
-          const data = await transcribeAudio(audioBlob);
-          if (data.transcript && data.transcript.trim()) {
-            await onSendMessage(data.transcript.trim());
-          }
-        } catch (err) {
-          console.error('STT Transcription Error:', err);
-        } finally {
-          setIsTranscribing(false);
-          clearAudio();
-        }
-      }
-    };
-
-    processRecordedAudio();
-  }, [audioBlob, onSendMessage, clearAudio]);
-
-  // Effect: Automatically play assistant response audio upon receiving new message
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage && lastMessage.role === 'assistant' && !isLoading && !isTranscribing) {
-      handlePlayTTS(lastMessage.content);
-    }
-  }, [messages, isLoading, isTranscribing]);
-
   /**
-   * Synthesizes text prompt into audio via backend TTS service and starts playback.
+   * Synthesizes text prompt into audio stream via backend TTS service and executes playback.
    */
-  const handlePlayTTS = async (textToSpeak) => {
+  const handlePlayTTS = useCallback(async (textToSpeak) => {
+    if (!textToSpeak) return;
+
     try {
       if (isPlayingAudio && audioPlayerRef.current) {
         audioPlayerRef.current.pause();
@@ -85,13 +64,58 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
 
       if (audioPlayerRef.current) {
         audioPlayerRef.current.src = audioUrl;
-        audioPlayerRef.current.play();
+        audioPlayerRef.current.play().catch((err) => {
+          console.warn('Browser autoplay policy restricted instant audio play:', err);
+          setIsPlayingAudio(false);
+        });
       }
     } catch (err) {
       console.error('TTS Audio Playback Error:', err);
       setIsPlayingAudio(false);
     }
-  };
+  }, [isPlayingAudio]);
+
+  // Effect: Safely trigger TTS audio playback ONCE when a new assistant message arrives
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    
+    if (
+      lastMessage && 
+      lastMessage.role === 'assistant' && 
+      !isLoading && 
+      !isTranscribing &&
+      lastSpokenMessageRef.current !== lastMessage.content
+    ) {
+      lastSpokenMessageRef.current = lastMessage.content; // Lock message content from re-triggering
+      handlePlayTTS(lastMessage.content);
+    }
+  }, [messages, isLoading, isTranscribing, handlePlayTTS]);
+
+  // Effect: Process recorded audio blob once user completes microphone recording
+  useEffect(() => {
+    const processRecordedAudio = async () => {
+      if (audioBlob) {
+        setIsTranscribing(true);
+        try {
+          const data = await transcribeAudio(audioBlob);
+          if (data.transcript && data.transcript.trim()) {
+            if (typeof sendMessageHandler === 'function') {
+              await sendMessageHandler(data.transcript.trim());
+            } else {
+              console.error('STT Error: No valid send message handler provided to ChatContainer.');
+            }
+          }
+        } catch (err) {
+          console.error('STT Transcription Error:', err);
+        } finally {
+          setIsTranscribing(false);
+          clearAudio();
+        }
+      }
+    };
+
+    processRecordedAudio();
+  }, [audioBlob, sendMessageHandler, clearAudio]);
 
   /**
    * Submits typed text input to the intake processor.
@@ -99,13 +123,15 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
   const handleSubmitText = (e) => {
     e.preventDefault();
     if (inputText.trim() && !isLoading && !isTranscribing) {
-      onSendMessage(inputText.trim());
+      if (typeof sendMessageHandler === 'function') {
+        sendMessageHandler(inputText.trim());
+      }
       setInputText('');
     }
   };
 
   /**
-   * Formats recording duration from seconds to MM:SS format.
+   * Formats recording duration in seconds to MM:SS format.
    */
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -115,7 +141,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
 
   return (
     <div className="flex flex-col h-full max-w-4xl mx-auto bg-white rounded-xl shadow-md overflow-hidden border border-slate-200">
-      {/* Hidden Audio Element for Web Speech Streaming Playback */}
+      {/* Hidden Audio Element for Voice Stream Playback */}
       <audio
         ref={audioPlayerRef}
         onEnded={() => setIsPlayingAudio(false)}
@@ -123,7 +149,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
         className="hidden"
       />
 
-      {/* Chat Conversation Feed */}
+      {/* Chat Conversation Stream */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg, index) => {
           const isUser = msg.role === 'user';
@@ -141,9 +167,10 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
               >
                 <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-                {/* Assistant Speech Manual Playback Trigger */}
+                {/* Manual Read Aloud Speech Trigger for Assistant Messages */}
                 {!isUser && (
                   <button
+                    type="button"
                     onClick={() => handlePlayTTS(msg.content)}
                     className="mt-2 text-slate-500 hover:text-amber-800 transition-colors flex items-center gap-1 text-xs font-medium"
                     title="Read Aloud"
@@ -168,7 +195,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
           </div>
         )}
 
-        {/* Speech-to-Text Processing State Indicator */}
+        {/* Speech-to-Text Processing Indicator */}
         {isTranscribing && (
           <div className="flex items-center gap-2 text-amber-800 text-xs font-medium p-2 bg-amber-50 rounded-lg border border-amber-200">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -179,7 +206,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Hardware / Permission Error Display */}
+      {/* Hardware / Permission Alert Display */}
       {micError && (
         <div className="bg-red-50 text-red-600 text-xs p-2.5 px-4 border-t border-red-200 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -209,7 +236,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
             </div>
           ) : (
             <>
-              {/* Microphone Record Button */}
+              {/* Voice Record Toggle Button */}
               <button
                 type="button"
                 onClick={startRecording}
@@ -220,7 +247,7 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
                 <Mic className="w-5 h-5 text-slate-700" />
               </button>
 
-              {/* Text Message Input Field */}
+              {/* Text Input Control */}
               <input
                 type="text"
                 value={inputText}
@@ -246,5 +273,4 @@ export const ChatContainer = ({ messages = [], onSendMessage, isLoading }) => {
   );
 };
 
-// Provides default export fallback to resolve import mismatches in App.jsx
 export default ChatContainer;

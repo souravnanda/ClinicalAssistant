@@ -1,157 +1,138 @@
+// frontend/src/App.jsx
 /**
- * FILE: frontend/src/App.jsx
- * PURPOSE: Root application component and primary state orchestrator for ClinicalPrep AI.
- * WHY WE NEED IT: Manages global session state (conversation history, intake slot memory, active step, emergency flags), coordinates API requests with FastAPI via api.js, and renders the layout.
+ * Root Application Component for ClinicalPrep AI v2.0.
+ * 
+ * Purpose:
+ *   Manages top-level application state, conversation turn memory, 
+ *   intake step progress tracking, red-flag emergency modal triggers, 
+ *   and communicates directly with the FastAPI backend via `sendIntakeStep`.
  */
 
-import React, { useState } from 'react';
-import Header from './components/header';
-import ChatContainer from './components/chatcontainer';
-import QuickReplyChips from './components/quickreplychips';
-import SummaryCard from './components/summarycard';
-import EmergencyModal from './components/emergencymodal';
-import { sendIntakeStep } from './services/api';
-import { Send } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import Header from './components/Header';
+import ChatContainer from './components/ChatContainer';
+import SummaryCard from './components/SummaryCard';
+import EmergencyModal from './components/EmergencyModal';
+import { sendIntakeStep, checkBackendHealth } from './services/api';
 
-export default function App() {
+export const App = () => {
+  // Session State Memory
+  const [sessionState, setSessionState] = useState(null);
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: "Hello! I'm ClinicalPrep AI, your patient-intake assistant. Before we begin, please note that I don't provide medical advice—I'm here to help organize your symptoms before your visit. May I please have your name to get started?",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      content:
+        "Hello! I'm ClinicalPrep AI, your patient-intake assistant. Before we begin, please note that I don't provide medical advice—I'm here to help organize your symptoms before your visit. May I please have your name to get started?"
     }
   ]);
-  const [sessionState, setSessionState] = useState(null);
-  const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isEmergency, setIsEmergency] = useState(false);
-  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
-  const [summaryText, setSummaryText] = useState('');
-  const [quickOptions, setQuickOptions] = useState([]);
-  const [currentStep, setCurrentStep] = useState(1);
+  const [backendStatus, setBackendStatus] = useState('checking');
 
-  const handleSendMessage = async (textToSend) => {
-    const messageText = textToSend || inputText;
-    if (!messageText.trim() || isLoading) return;
-
-    // 1. Append user message to conversation list
-    const userMsg = {
-      role: 'user',
-      content: messageText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  // Verify FastAPI backend connectivity on application load
+  useEffect(() => {
+    const verifyHealth = async () => {
+      try {
+        await checkBackendHealth();
+        setBackendStatus('connected');
+      } catch (err) {
+        console.error('Backend health verification failed:', err);
+        setBackendStatus('disconnected');
+      }
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setInputText('');
+    verifyHealth();
+  }, []);
+
+  /**
+   * Asynchronously submits patient messages to the FastAPI Pydantic intake engine.
+   * Updates conversation history, extracted session state, and checks for red flags.
+   */
+  const handleSendMessage = async (userText) => {
+    if (!userText || isLoading) return;
+
+    // 1. Append User Message to UI Chat Stream
+    const updatedMessages = [...messages, { role: 'user', content: userText }];
+    setMessages(updatedMessages);
     setIsLoading(true);
 
     try {
-      // 2. Dispatch network request to FastAPI backend
-      const response = await sendIntakeStep(messageText, sessionState);
+      // 2. Transmit Message Payload and Current Session Memory to FastAPI Endpoint
+      const response = await sendIntakeStep(userText, sessionState);
 
-      if (response) {
-        if (response.session_state) {
-          setSessionState(response.session_state);
-        }
+      // 3. Update Client Session Memory with Returned State
+      setSessionState(response.updated_state);
 
-        if (response.active_step) {
-          setCurrentStep(response.active_step);
-        }
-
-        if (response.is_emergency) {
-          setIsEmergency(true);
-          setShowEmergencyModal(true);
-        }
-
-        if (response.summary) {
-          setSummaryText(response.summary);
-        }
-
-        if (response.quick_options) {
-          setQuickOptions(response.quick_options);
-        } else {
-          setQuickOptions([]);
-        }
-
-        // 3. Append assistant response
-        if (response.next_question) {
-          const assistantMsg = {
-            role: 'assistant',
-            content: response.next_question,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-        }
+      // 4. Trigger Emergency Modal Overlay if Red Flags Were Detected
+      if (response.is_emergency) {
+        setIsEmergency(true);
       }
-    } catch (error) {
-      console.error("Failed to send intake message:", error);
-      const errorMsg = {
-        role: 'assistant',
-        content: "I apologize, but I encountered a network error connecting to the server. Please ensure the backend server is running and try again.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+
+      // 5. Append Assistant Response Question to Chat Feed
+      if (response.next_question) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: response.next_question }
+        ]);
+      }
+    } catch (err) {
+      console.error('Intake Processing Error:', err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content:
+            'I encountered an error processing your input. Please verify that the backend server is running and try again.'
+        }
+      ]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
+  // Derive Current Progression Step & Progress Bar Percentage
+  const currentStep = sessionState?.current_step || 1;
+  const isCompleted = sessionState?.is_completed || false;
+  const summaryBrief = sessionState?.summary_brief || '';
 
   return (
-    <div className="flex flex-col h-screen bg-[#FFF8F0] text-[#38240D]">
-      {/* Top Header & Intake Tracker */}
-      <Header currentStep={currentStep} isEmergency={isEmergency} />
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
+      {/* Top Navigation & Fixed Progress Tracker Header */}
+      <Header currentStep={currentStep} isCompleted={isCompleted} />
 
-      {/* Triage Emergency Modal */}
-      <EmergencyModal
-        isOpen={showEmergencyModal}
-        onClose={() => setShowEmergencyModal(false)}
-      />
+      {/* Main Container Workspace */}
+      <main className="flex-1 max-w-5xl w-full mx-auto p-4 flex flex-col gap-4">
+        {/* Backend Connection Warning Banner */}
+        {backendStatus === 'disconnected' && (
+          <div className="bg-amber-50 border border-amber-300 text-amber-800 px-4 py-2 rounded-lg text-xs flex items-center justify-between">
+            <span>
+              ⚠️ <strong>Backend Disconnected:</strong> Cannot reach FastAPI on http://localhost:8000. Please launch your backend server.
+            </span>
+          </div>
+        )}
 
-      {/* Scrollable Conversation & Summary Brief */}
-      <main className="flex-1 overflow-y-auto flex flex-col justify-between">
-        <ChatContainer messages={messages} isLoading={isLoading} />
+        {/* Primary Intake Chat Stream */}
+        <div className="flex-1 min-h-[500px]">
+          <ChatContainer
+            messages={messages}
+            onSendMessage={handleSendMessage}
+            isLoading={isLoading}
+          />
+        </div>
 
-        {summaryText && (
-          <div className="px-4 pb-4">
-            <SummaryCard summaryText={summaryText} />
+        {/* Post-Intake Summary Doctor Brief Card (Renders when is_completed = true) */}
+        {isCompleted && summaryBrief && (
+          <div className="mt-4">
+            <SummaryCard summaryBrief={summaryBrief} />
           </div>
         )}
       </main>
 
-      {/* Contextual Quick-Reply Chips */}
-      <QuickReplyChips
-        options={quickOptions}
-        onSelect={(option) => handleSendMessage(option)}
-        disabled={isLoading}
-      />
-
-      {/* Sticky Bottom Input Bar */}
-      <footer className="sticky bottom-0 bg-[#FFF8F0]/95 backdrop-blur-md border-t border-brand-200 p-4">
-        <div className="max-w-3xl mx-auto flex items-center gap-2">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type your response here..."
-            disabled={isLoading}
-            className="flex-1 px-4 py-3 bg-white border border-brand-200 rounded-xl text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 disabled:opacity-50 transition-all shadow-xs text-brand-900 placeholder:text-brand-700/50"
-          />
-          <button
-            onClick={() => handleSendMessage()}
-            disabled={isLoading || !inputText.trim()}
-            className="p-3 bg-brand-500 text-white rounded-xl hover:bg-brand-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xs"
-          >
-            <Send className="w-5 h-5" />
-          </button>
-        </div>
-      </footer>
+      {/* Triage Emergency Red-Flag Warning Overlay */}
+      {isEmergency && (
+        <EmergencyModal onClose={() => setIsEmergency(false)} />
+      )}
     </div>
   );
-}
+};
+
+export default App;

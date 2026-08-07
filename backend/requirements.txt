@@ -6,3 +6,7 @@ slowapi
 python-dotenv
 pytest
 httpx
+transformers
+torch
+accelerate
+python-multipart

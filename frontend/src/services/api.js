@@ -1,17 +1,21 @@
 /**
  * FILE: frontend/src/services/api.js
- * PURPOSE: HTTP API client for backend communication.
- * WHY WE NEED IT: Encapsulates all asynchronous network requests to FastAPI (/api/v2/intake/step), isolating network error handling, request formatting, and JSON parsing from UI components.
+ * PURPOSE: Asynchronous HTTP client service for backend communication.
+ * WHY WE NEED IT: Centralizes network requests between the React frontend and 
+ * the FastAPI backend. Encapsulates request headers, endpoint routing, 
+ * payload formatting, and error handling for seamless maintainability.
  */
 
+// Base backend URL loaded from environment variables (Vite scope) with local fallback
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
 /**
- * Sends a patient message and current session state to the FastAPI backend.
- * 
- * @param {string} userMessage - The text input provided by the patient.
- * @param {Object|null} sessionState - The current PatientSlotState JSON object.
- * @returns {Promise<Object>} Updated session_state, next_question, active_step, and emergency flags.
+ * Sends a patient message and current session state to the FastAPI intake endpoint.
+ *
+ * @param {string} userMessage - The raw text message entered by the patient.
+ * @param {Object|null} sessionState - The current intake session state object (or null on turn 1).
+ * @returns {Promise<Object>} Resolves to the backend API response payload.
+ * @throws {Error} Throws a detailed error message if the HTTP request or validation fails.
  */
 export async function sendIntakeStep(userMessage, sessionState = null) {
   try {
@@ -27,32 +31,42 @@ export async function sendIntakeStep(userMessage, sessionState = null) {
     });
 
     if (!response.ok) {
-      if (response.status === 429) {
-        throw new Error("Rate limit exceeded. Please wait a moment before sending another message.");
-      }
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `Server returned status code ${response.status}`);
+      const detailMsg = Array.isArray(errorData.detail)
+        ? errorData.detail[0]?.msg
+        : errorData.detail;
+      throw new Error(detailMsg || `Server error (Status ${response.status})`);
     }
 
     return await response.json();
   } catch (error) {
-    console.error("API Error [sendIntakeStep]:", error);
+    console.error("API Service Error [sendIntakeStep]:", error);
     throw error;
   }
 }
 
 /**
- * Checks FastAPI backend health status.
- * 
- * @returns {Promise<boolean>} True if server is healthy, false otherwise.
+ * Checks the operational health of the FastAPI backend server.
+ *
+ * @returns {Promise<Object>} Resolves to the health status payload.
+ * @throws {Error} Throws an error if the server is unreachable or unhealthy.
  */
 export async function checkBackendHealth() {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/health`);
-    const data = await response.json();
-    return data.status === 'healthy';
+    const response = await fetch(`${API_BASE_URL}/api/health`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Health check failed with status ${response.status}`);
+    }
+
+    return await response.json();
   } catch (error) {
-    console.error("Health Check Failed:", error);
-    return false;
+    console.error("API Service Error [checkBackendHealth]:", error);
+    throw error;
   }
 }

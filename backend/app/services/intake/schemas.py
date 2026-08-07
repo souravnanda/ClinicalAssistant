@@ -1,52 +1,123 @@
+# backend/app/services/intake/schemas.py
 """
-FILE: backend/app/services/intake/schemas.py
-PURPOSE: Defines Pydantic v2 schemas for patient demographics, clinical slots, intake session state, and LLM extraction outputs.
+Pydantic v2 Schemas for Clinical Intake Engine.
+
+Purpose:
+    Defines strict typed data models for patient demographics, clinical symptoms,
+    LLM structured slot extraction, session memory state, and FastAPI HTTP request/response payloads.
 """
 
-import uuid
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
 class PatientDemographics(BaseModel):
-    """PURPOSE: Stores non-clinical patient identification fields gathered during Step 1."""
-    name: Optional[str] = Field(default=None, description="Patient's full preferred name.")
-    age: Optional[int] = Field(default=None, description="Patient's age in years.")
-    gender: Optional[str] = Field(default=None, description="Patient's gender identity.")
-    height: Optional[str] = Field(default=None, description="Patient's height measurement.")
-    weight: Optional[str] = Field(default=None, description="Patient's body weight measurement.")
-    contact: Optional[str] = Field(default=None, description="Patient's contact information.")
+    """
+    Data container for basic patient demographic slot information.
+    
+    Attributes:
+        name (str, optional): Patient's full or preferred name.
+        age (str, optional): Patient's age or birth date.
+        gender (str, optional): Patient's identified gender.
+        height (str, optional): Patient's height measurement.
+        weight (str, optional): Patient's weight measurement.
+        contact (str, optional): Patient's contact phone number or email.
+    """
+    name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+    height: Optional[str] = None
+    weight: Optional[str] = None
+    contact: Optional[str] = None
 
 
 class ClinicalSlots(BaseModel):
-    """PURPOSE: Stores structured clinical data gathered using the medical intake framework."""
-    chief_complaint: Optional[str] = Field(default=None, description="Primary medical symptom or reason for visit.")
-    onset_duration: Optional[str] = Field(default=None, description="When symptoms started and how long they last.")
-    severity: Optional[str] = Field(default=None, description="Pain or discomfort intensity rating.")
-    pattern: Optional[str] = Field(default=None, description="Symptom behavior pattern over time.")
-    triggers_relievers: Optional[str] = Field(default=None, description="Factors worsening or alleviating symptoms.")
-    current_medications: Optional[str] = Field(default=None, description="Prescription or OTC medications taken.")
-    home_remedies: Optional[str] = Field(default=None, description="Home care treatments attempted.")
-    doctor_questions: List[str] = Field(default_factory=list, description="Questions patient wants to ask physician.")
-
-
-class IntakeSessionState(BaseModel):
-    """PURPOSE: Persistent state container tracking conversation memory, progress, and safety flags."""
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique session identifier.")
-    current_step: int = Field(default=1, description="Active step index (1 to 5).")
-    is_completed: bool = Field(default=False, description="True when intake workflow is complete.")
-    is_emergency: bool = Field(default=False, description="True when acute emergency symptoms are detected.")
-    summary_brief: Optional[str] = Field(default=None, description="Generated Doctor Brief markdown text.")
-    demographics: PatientDemographics = Field(default_factory=PatientDemographics)
-    clinical_slots: ClinicalSlots = Field(default_factory=ClinicalSlots)
-    conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    """
+    Data container for clinical symptom slot information collected during intake.
+    
+    Attributes:
+        chief_complaint (str, optional): Primary reason for seeking medical care.
+        onset_duration (str, optional): Timeline/duration of symptom onset.
+        severity (str, optional): Pain/discomfort severity rating or description.
+        pattern_triggers (str, optional): Constant vs intermittent pattern or worsening factors.
+        current_medications (str, optional): Active medications or relevant medical history.
+        patient_goals (str, optional): Specific questions or discussion points for the physician.
+    """
+    chief_complaint: Optional[str] = None
+    onset_duration: Optional[str] = None
+    severity: Optional[str] = None
+    pattern_triggers: Optional[str] = None
+    current_medications: Optional[str] = None
+    patient_goals: Optional[str] = None
 
 
 class ExtractionResult(BaseModel):
-    """PURPOSE: Enforces structured JSON output schema on OpenAI for single-turn slot extraction."""
+    """
+    Structured extraction output returned by the OpenAI Pydantic parser per conversation turn.
+    
+    Attributes:
+        demographics (PatientDemographics, optional): Newly extracted demographic fields.
+        clinical_slots (ClinicalSlots, optional): Newly extracted clinical symptom fields.
+        next_question (str, optional): Single follow-up question generated by the LLM.
+        is_emergency (bool): Red-flag indicator for severe or acute symptoms requiring urgent care.
+        summary_brief (str, optional): Final Doctor Brief generated upon intake completion.
+        quick_options (List[str]): Contextual suggestion chips for single-tap user responses.
+    """
+    demographics: Optional[PatientDemographics] = None
+    clinical_slots: Optional[ClinicalSlots] = None
+    next_question: Optional[str] = None
+    is_emergency: bool = False
+    summary_brief: Optional[str] = None
+    quick_options: List[str] = Field(default_factory=list)
+
+
+class IntakeSessionState(BaseModel):
+    """
+    Persistent session memory object tracking clinical intake progress across HTTP turns.
+    
+    Attributes:
+        session_id (str): Unique identifier for the intake session.
+        current_step (int): Active progression step (1 to 5).
+        is_completed (bool): Flag indicating if all intake requirements have been satisfied.
+        is_emergency (bool): Flag indicating if red-flag symptoms were flagged during intake.
+        summary_brief (str, optional): Compiled Markdown summary brief for physician review.
+        demographics (PatientDemographics): Accumulated demographic fields.
+        clinical_slots (ClinicalSlots): Accumulated clinical symptom fields.
+    """
+    session_id: Optional[str] = "default_session"
+    current_step: int = 1
+    is_completed: bool = False
+    is_emergency: bool = False
+    summary_brief: Optional[str] = None
     demographics: PatientDemographics = Field(default_factory=PatientDemographics)
     clinical_slots: ClinicalSlots = Field(default_factory=ClinicalSlots)
-    is_emergency: bool = Field(default=False, description="True if input contains acute red-flag symptoms.")
-    missing_fields: List[str] = Field(default_factory=list, description="List of unpopulated mandatory fields.")
-    next_question: str = Field(description="Targeted follow-up question asking for highest priority missing slot.")
-    quick_options: Optional[List[str]] = Field(default=None, description="Quick-reply suggestion chips for frontend.")
+
+
+class IntakeStepRequest(BaseModel):
+    """
+    Request payload schema for POST /api/v2/intake/step endpoint.
+    
+    Attributes:
+        user_message (str): Raw text message entered or spoken by the patient.
+        session_state (Dict[str, Any], optional): Current session memory dictionary from the frontend.
+    """
+    user_message: str
+    session_state: Optional[Dict[str, Any]] = None
+
+
+class IntakeStepResponse(BaseModel):
+    """
+    Response payload schema returned by POST /api/v2/intake/step endpoint.
+    
+    Attributes:
+        updated_state (Dict[str, Any]): Updated session memory dictionary to persist in client state.
+        next_question (str): Follow-up question to present to the patient.
+        is_completed (bool): Indicates if the intake process is finalized.
+        is_emergency (bool): Indicates if acute red-flag symptoms were detected.
+        quick_options (List[str]): Suggested quick-reply options to render above the chat input.
+    """
+    updated_state: Dict[str, Any]
+    next_question: str
+    is_completed: bool = False
+    is_emergency: bool = False
+    quick_options: List[str] = Field(default_factory=list)

@@ -1,106 +1,146 @@
+# backend/app/services/intake/state.py
 """
-FILE: backend/app/services/intake/state.py
-PURPOSE: Session state machine manager ensuring demographic completeness, slot merging, and monotonic step progression.
+Session State Machine Engine for ClinicalPrep AI v2.0.
+
+Purpose:
+    Manages non-destructive slot merging, monotonic step progression calculation,
+    and output response construction for multi-turn clinical conversations.
 """
 
-from typing import Tuple, List, Optional
-from app.services.intake.schemas import IntakeSessionState, ExtractionResult
-from app.services.intake.extractor import extract_slots_from_turn
+from typing import Dict, Any, Optional
+from app.services.intake.schemas import (
+    IntakeSessionState,
+    ExtractionResult,
+    IntakeStepResponse,
+    PatientDemographics,
+    ClinicalSlots
+)
 
 
-def merge_slots(current_state: IntakeSessionState, extraction: ExtractionResult) -> IntakeSessionState:
-    """PURPOSE: Safely merges non-null extracted slot values into persistent session memory."""
-    # Merge demographics
-    for field, value in extraction.demographics.model_dump(exclude_unset=True).items():
-        if value is not None:
-            setattr(current_state.demographics, field, value)
-
-    # Merge clinical slots
-    for field, value in extraction.clinical_slots.model_dump(exclude_unset=True).items():
-        if value is not None and field != 'doctor_questions':
-            setattr(current_state.clinical_slots, field, value)
+def merge_slots(current_state: IntakeSessionState, extracted: ExtractionResult) -> IntakeSessionState:
+    """
+    Non-destructively merges newly extracted demographic and clinical slots into the active session state.
     
-    if extraction.clinical_slots.doctor_questions:
-        for question in extraction.clinical_slots.doctor_questions:
-            if question not in current_state.clinical_slots.doctor_questions:
-                current_state.clinical_slots.doctor_questions.append(question)
+    Preserves all previously captured slot values and only updates fields when new non-null and 
+    non-empty strings are extracted during the current turn.
 
-    # Merge emergency flag
-    if extraction.is_emergency:
-        current_state.is_emergency = True
+    Args:
+        current_state (IntakeSessionState): Active session memory instance.
+        extracted (ExtractionResult): Structured extraction result from the LLM parser.
+
+    Returns:
+        IntakeSessionState: Session memory instance with updated slot values.
+    """
+    # 1. Merge Demographic Slots
+    if extracted.demographics:
+        for field, value in extracted.demographics.model_dump().items():
+            if value is not None and value != "":
+                setattr(current_state.demographics, field, value)
+
+    # 2. Merge Clinical Symptoms Slots
+    if extracted.clinical_slots:
+        for field, value in extracted.clinical_slots.model_dump().items():
+            if value is not None and value != "":
+                setattr(current_state.clinical_slots, field, value)
 
     return current_state
 
 
 def calculate_current_step(state: IntakeSessionState) -> int:
-    """PURPOSE: Calculates current intake workflow step (1 through 5) based on filled slots, ensuring monotonic progression."""
+    """
+    Calculates intake stage progression monotonically from Step 1 through Step 5.
+    
+    Monotonic progression prevents step regression to ensure a consistent patient 
+    interview experience.
+
+    Step Progression Criteria:
+        - Step 1: Demographics & Initial Chief Complaint Gathering
+        - Step 2: History & Onset/Duration Investigation
+        - Step 3: Symptom Characteristics (Severity, Pattern, Triggers)
+        - Step 4: Interventions, Medications & Goals
+        - Step 5: Intake Complete (Doctor Brief Finalized)
+
+    Args:
+        state (IntakeSessionState): Active session memory instance.
+
+    Returns:
+        int: Calculated progression step number (1 to 5).
+    """
     demo = state.demographics
-    slots = state.clinical_slots
+    clin = state.clinical_slots
 
-    calculated_step = 1
+    # Enforce monotonic step progression (never regress below current step)
+    highest_step = max(getattr(state, "current_step", 1) or 1, 1)
 
-    # Step 1 Complete: Demographics (Name, Age, Gender, Height, Weight, Contact) + Chief Complaint
-    if demo.name and demo.age and demo.gender and demo.height and demo.weight and demo.contact and slots.chief_complaint:
-        calculated_step = 2
-        # Step 2 Complete: Onset & Severity Details
-        if slots.onset_duration and slots.severity:
-            calculated_step = 3
-            # Step 3 Complete: Interventions & Medications
-            if slots.current_medications:
-                calculated_step = 4
-                # Step 4 Complete: Doctor Questions
-                if slots.doctor_questions:
-                    calculated_step = 5
+    # Step 5 Check: Doctor Brief generated or all primary clinical slots satisfied
+    if state.is_completed or (
+        clin.chief_complaint and clin.onset_duration and clin.severity and 
+        clin.current_medications and clin.patient_goals
+    ):
+        return 5
 
-    # Enforce Monotonicity (Step tracker cannot regress)
-    return max(state.current_step, calculated_step)
+    # Step 4 Check: Name, chief complaint, duration, and severity captured
+    if demo.name and clin.chief_complaint and clin.onset_duration and clin.severity:
+        return max(highest_step, 4)
+
+    # Step 3 Check: Name, chief complaint, and duration captured
+    if demo.name and clin.chief_complaint and clin.onset_duration:
+        return max(highest_step, 3)
+
+    # Step 2 Check: Name and chief complaint captured
+    if demo.name and clin.chief_complaint:
+        return max(highest_step, 2)
+
+    # Default to Step 1
+    return highest_step
 
 
-def process_user_turn(
-    user_message: str,
-    current_state: IntakeSessionState
-) -> Tuple[IntakeSessionState, str, Optional[List[str]]]:
-    """PURPOSE: Orchestrates conversation turn, merges state, checks workflow completion, and generates Doctor Brief."""
-    # 1. Append user message to conversation history
-    current_state.conversation_history.append({
-        "role": "user",
-        "content": user_message
-    })
+def update_session_state(
+    current_state: Optional[Dict[str, Any]], 
+    extracted_result: ExtractionResult
+) -> IntakeStepResponse:
+    """
+    Orchestrates session state updates across conversation turns.
 
-    # 2. Extract slots via LLM Extractor
-    extraction: ExtractionResult = extract_slots_from_turn(
-        user_message=user_message,
-        current_state=current_state
+    Validates existing session state dictionaries, applies non-destructive slot merging,
+    re-calculates current step progression, processes emergency red flags, and constructs 
+    the API response payload.
+
+    Args:
+        current_state (Optional[Dict[str, Any]]): Existing session dictionary from the client request.
+        extracted_result (ExtractionResult): Validated extraction result from the slot extractor.
+
+    Returns:
+        IntakeStepResponse: Validated response payload containing updated state, next question, 
+                            and triage indicators.
+    """
+    # 1. Instantiate or validate existing session memory
+    if current_state and isinstance(current_state, dict) and len(current_state) > 0:
+        session = IntakeSessionState.model_validate(current_state)
+    else:
+        session = IntakeSessionState()
+
+    # 2. Merge newly extracted slots into session state
+    session = merge_slots(session, extracted_result)
+
+    # 3. Monotonically update intake progression step
+    session.current_step = calculate_current_step(session)
+
+    # 4. Handle red-flag emergency flags
+    if extracted_result.is_emergency:
+        session.is_emergency = True
+
+    # 5. Process completion summary brief
+    if extracted_result.summary_brief:
+        session.summary_brief = extracted_result.summary_brief
+        session.is_completed = True
+        session.current_step = 5
+
+    # 6. Format and return IntakeStepResponse for client consuming API
+    return IntakeStepResponse(
+        updated_state=session.model_dump(),
+        next_question=extracted_result.next_question or "Thank you. Your clinical intake details have been recorded.",
+        is_completed=session.is_completed,
+        is_emergency=session.is_emergency,
+        quick_options=extracted_result.quick_options or []
     )
-
-    # 3. Merge newly extracted slots into persistent session state
-    updated_state = merge_slots(current_state, extraction)
-
-    # 4. Update workflow progress step safely
-    updated_state.current_step = calculate_current_step(updated_state)
-
-    # 5. Handle completion check and brief generation
-    if updated_state.current_step == 5 and not updated_state.is_completed:
-        updated_state.is_completed = True
-        questions_str = ", ".join(updated_state.clinical_slots.doctor_questions) if updated_state.clinical_slots.doctor_questions else "None specified"
-        updated_state.summary_brief = (
-            f"# CLINICAL PREP BRIEF\n"
-            f"**Patient Name:** {updated_state.demographics.name or 'N/A'}\n"
-            f"**Age:** {updated_state.demographics.age or 'N/A'} | **Gender:** {updated_state.demographics.gender or 'N/A'}\n"
-            f"**Height:** {updated_state.demographics.height or 'N/A'} | **Weight:** {updated_state.demographics.weight or 'N/A'}\n"
-            f"**Contact:** {updated_state.demographics.contact or 'N/A'}\n\n"
-            f"### CLINICAL DETAILS\n"
-            f"- **Chief Complaint:** {updated_state.clinical_slots.chief_complaint or 'N/A'}\n"
-            f"- **Onset / Duration:** {updated_state.clinical_slots.onset_duration or 'N/A'}\n"
-            f"- **Severity:** {updated_state.clinical_slots.severity or 'N/A'}\n"
-            f"- **Current Medications:** {updated_state.clinical_slots.current_medications or 'N/A'}\n"
-            f"- **Questions for Doctor:** {questions_str}"
-        )
-
-    # 6. Append assistant response to conversation history
-    updated_state.conversation_history.append({
-        "role": "assistant",
-        "content": extraction.next_question
-    })
-
-    return updated_state, extraction.next_question, extraction.quick_options

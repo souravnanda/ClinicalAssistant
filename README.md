@@ -1,6 +1,7 @@
 🩺 ClinicalPrep AI (v2.0) — Master Documentation & Progress Report
 ClinicalPrep AI is an intelligent, empathetic patient-intake assistant designed to bridge the gap between patients and healthcare providers. It conducts a structured, conversational interview to organize a patient's medical concerns, symptoms, history, and goals into a clean, professional "Doctor Brief" (Patient Pre-Visit Summary) prior to their appointment.
 
+
 🎯 Purpose & Vision
 In traditional healthcare settings, short consultation times often lead to rushed discussions where patients forget critical symptoms or medical history. ClinicalPrep AI solves this by acting as a pre-visit administrative triage nurse:
 

@@ -1,43 +1,61 @@
+// frontend/src/components/SummaryCard.jsx
 /**
- * FILE: frontend/src/components/SummaryCard.jsx
- * PURPOSE: Structured Doctor Brief display component.
- * WHY WE NEED IT: Formats extracted clinical slots and session data into a clean, reviewable report once intake reaches completion, complete with direct copy/print controls.
+ * Summary Card Component for ClinicalPrep AI v2.0.
+ * 
+ * Purpose:
+ *   Renders the formatted Markdown Doctor Brief and provides a 1-click trigger
+ *   to download the official Clinical Record PDF document.
  */
 
-import React from 'react';
-import { FileText, Copy, Check } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileText, Download, CheckCircle, Loader2 } from 'lucide-react';
+import { downloadIntakePdf } from '../services/api';
 
-export default function SummaryCard({ summaryText }) {
-  const [copied, setCopied] = React.useState(false);
+export const SummaryCard = ({ summaryBrief, sessionState }) => {
+  const [isDownloading, setIsDownloading] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(summaryText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleDownload = async () => {
+    try {
+      setIsDownloading(true);
+      await downloadIntakePdf(sessionState);
+    } catch (err) {
+      console.error('PDF Download Error:', err);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
-  if (!summaryText) return null;
-
   return (
-    <div className="bg-white border-2 border-brand-500 rounded-2xl p-5 shadow-md my-4 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between border-b border-brand-100 pb-3 mb-3">
-        <div className="flex items-center gap-2 text-brand-900 font-bold">
-          <FileText className="w-5 h-5 text-brand-500" />
-          <h3>Generated Doctor Brief</h3>
+    <div className="bg-white rounded-xl shadow-lg border border-amber-200 overflow-hidden my-4 transition-all">
+      {/* Header Banner */}
+      <div className="bg-amber-800 text-white p-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="w-5 h-5 text-amber-300" />
+          <h3 className="font-semibold text-base">Patient Pre-Visit Summary Ready</h3>
         </div>
-
         <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 text-xs font-medium text-brand-700 hover:text-brand-900 bg-brand-50 px-3 py-1.5 rounded-lg border border-brand-200 transition-all"
+          type="button"
+          onClick={handleDownload}
+          disabled={isDownloading}
+          className="bg-white text-amber-900 hover:bg-amber-50 font-medium px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
         >
-          {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-          <span>{copied ? 'Copied' : 'Copy Text'}</span>
+          {isDownloading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Download className="w-4 h-4 text-amber-800" />
+          )}
+          <span>{isDownloading ? 'Generating PDF...' : 'Download Summary PDF'}</span>
         </button>
       </div>
 
-      <div className="text-xs text-brand-900 font-mono whitespace-pre-wrap bg-brand-50/50 p-4 rounded-xl border border-brand-100 leading-relaxed max-h-80 overflow-y-auto">
-        {summaryText}
+      {/* Markdown Brief Content */}
+      <div className="p-6 bg-amber-50/30 text-slate-800 text-sm leading-relaxed font-sans">
+        <div className="prose prose-amber max-w-none whitespace-pre-wrap">
+          {summaryBrief}
+        </div>
       </div>
     </div>
   );
-}
+};
+
+export default SummaryCard;

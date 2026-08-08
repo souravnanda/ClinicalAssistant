@@ -4,8 +4,8 @@
  * 
  * Purpose:
  *   Manages top-level application state, conversation turn memory, 
- *   intake step progress tracking, red-flag emergency modal triggers, 
- *   and communicates directly with the FastAPI backend via `sendIntakeStep`.
+ *   intake step progress tracking, dynamic quick-reply chip updates, 
+ *   emergency modal triggers, and communicates directly with the FastAPI backend.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -16,8 +16,9 @@ import EmergencyModal from './components/EmergencyModal';
 import { sendIntakeStep, checkBackendHealth } from './services/api';
 
 export const App = () => {
-  // Session State Memory
+  // Session State & Quick Options Memory
   const [sessionState, setSessionState] = useState(null);
+  const [quickOptions, setQuickOptions] = useState([]);
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -45,22 +46,24 @@ export const App = () => {
 
   /**
    * Asynchronously submits patient messages to the FastAPI Pydantic intake engine.
-   * Updates conversation history, extracted session state, and checks for red flags.
+   * Updates conversation history, extracted session state, quick options, and checks for red flags.
    */
   const handleSendMessage = async (userText) => {
     if (!userText || isLoading) return;
 
-    // 1. Append User Message to UI Chat Stream
+    // 1. Append User Message to UI Chat Stream & Clear Chips
     const updatedMessages = [...messages, { role: 'user', content: userText }];
     setMessages(updatedMessages);
+    setQuickOptions([]);
     setIsLoading(true);
 
     try {
       // 2. Transmit Message Payload and Current Session Memory to FastAPI Endpoint
       const response = await sendIntakeStep(userText, sessionState);
 
-      // 3. Update Client Session Memory with Returned State
+      // 3. Update Client Session Memory & Quick Options with Returned State
       setSessionState(response.updated_state);
+      setQuickOptions(response.quick_options || []);
 
       // 4. Trigger Emergency Modal Overlay if Red Flags Were Detected
       if (response.is_emergency) {
@@ -89,7 +92,7 @@ export const App = () => {
     }
   };
 
-  // Derive Current Progression Step & Progress Bar Percentage
+  // Derive Current Progression Step & Completion Status
   const currentStep = sessionState?.current_step || 1;
   const isCompleted = sessionState?.is_completed || false;
   const summaryBrief = sessionState?.summary_brief || '';
@@ -114,6 +117,7 @@ export const App = () => {
         <div className="flex-1 min-h-[500px]">
           <ChatContainer
             messages={messages}
+            quickOptions={quickOptions}
             onSendMessage={handleSendMessage}
             isLoading={isLoading}
           />

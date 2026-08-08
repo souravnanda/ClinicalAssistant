@@ -1,29 +1,34 @@
+# backend/app/services/intake/__init__.py
 """
-FILE: backend/app/services/intake/__init__.py
-PURPOSE: Package initialization for the clinical intake service module.
-WHY WE NEED IT: Exposes schemas, slot extraction functions, and state engine processing functions for clean module imports across the backend application.
+Clinical Intake Service Package Initialization.
+
+Purpose:
+    Exposes core clinical intake schemas and session state machine functions 
+    for structured slot extraction and multi-turn interview progression.
 """
 
 from app.services.intake.schemas import (
     PatientDemographics,
     ClinicalSlots,
-    IntakeSessionState,
     ExtractionResult,
+    IntakeSessionState,
+    IntakeStepRequest,
+    IntakeStepResponse,
 )
-from app.services.intake.extractor import extract_slots_from_turn
 from app.services.intake.state import (
-    process_user_turn,
     merge_slots,
     calculate_current_step,
+    update_session_state,
 )
 
 __all__ = [
     "PatientDemographics",
     "ClinicalSlots",
-    "IntakeSessionState",
     "ExtractionResult",
-    "extract_slots_from_turn",
-    "process_user_turn",
+    "IntakeSessionState",
+    "IntakeStepRequest",
+    "IntakeStepResponse",
     "merge_slots",
     "calculate_current_step",
+    "update_session_state",
 ]

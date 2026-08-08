@@ -1,26 +1,36 @@
+// frontend/src/components/QuickReplyChips.jsx
 /**
- * FILE: frontend/src/components/QuickReplyChips.jsx
- * PURPOSE: Contextual suggestion buttons rendered above the message input bar.
- * WHY WE NEED IT: Reduces patient typing effort on mobile devices by offering one-tap responses (e.g., timeline choices, pain scale ratings) tailored to the active question.
+ * Quick Reply Suggestion Chips Component for ClinicalPrep AI v2.0.
+ * 
+ * Purpose:
+ *   Renders dynamic, single-tap option buttons above the chat input field 
+ *   to streamline patient responses for common questions (e.g., Chief Complaint, 
+ *   Gender identity, Onset/Duration).
  */
 
 import React from 'react';
 
-export default function QuickReplyChips({ options = [], onSelect, disabled = false }) {
-  if (!options || options.length === 0) return null;
+export const QuickReplyChips = ({ options = [], onSelectOption, disabled = false }) => {
+  if (!options || options.length === 0) {
+    return null;
+  }
 
   return (
-    <div className="flex flex-wrap gap-2 px-4 py-2 justify-center max-w-3xl mx-auto">
+    <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-amber-50/50 border-t border-slate-100">
+      <span className="text-xs font-medium text-amber-900/70 mr-1">Suggested:</span>
       {options.map((option, index) => (
         <button
           key={index}
-          onClick={() => onSelect(option)}
+          type="button"
           disabled={disabled}
-          className="px-3.5 py-1.5 text-xs font-medium bg-white text-brand-700 border border-brand-200 rounded-full shadow-xs hover:bg-brand-50 hover:border-brand-500 hover:text-brand-900 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => onSelectOption(option)}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white text-slate-700 border border-slate-300 shadow-sm hover:bg-amber-800 hover:text-white hover:border-amber-800 transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
         >
           {option}
         </button>
       ))}
     </div>
   );
-}
+};
+
+export default QuickReplyChips;

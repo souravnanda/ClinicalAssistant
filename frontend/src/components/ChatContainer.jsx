@@ -5,16 +5,18 @@
  * Purpose:
  *   Serves as the primary conversation interface. Manages auto-scrolling message streams, 
  *   browser microphone audio recording via `useAudioRecorder`, automated Speech-to-Text (STT) 
- *   transcription, and automatic Text-to-Speech (TTS) voice playback for assistant responses.
+ *   transcription, automatic Text-to-Speech (TTS) voice playback, and Quick Reply Chips rendering.
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, Send, Volume2, Square, Loader2, AlertCircle } from 'lucide-react';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { transcribeAudio, synthesizeSpeech } from '../services/api';
+import QuickReplyChips from './QuickReplyChips';
 
 export const ChatContainer = ({
   messages = [],
+  quickOptions = [],
   onSendMessage,
   handleSendMessage,
   isLoading
@@ -28,7 +30,7 @@ export const ChatContainer = ({
 
   const messagesEndRef = useRef(null);
   const audioPlayerRef = useRef(null);
-  const lastSpokenMessageRef = useRef(null); // Ref to prevent infinite TTS re-synthesis loops
+  const lastSpokenMessageRef = useRef(null);
 
   // Initialize Web Audio API recorder hook
   const {
@@ -86,7 +88,7 @@ export const ChatContainer = ({
       !isTranscribing &&
       lastSpokenMessageRef.current !== lastMessage.content
     ) {
-      lastSpokenMessageRef.current = lastMessage.content; // Lock message content from re-triggering
+      lastSpokenMessageRef.current = lastMessage.content;
       handlePlayTTS(lastMessage.content);
     }
   }, [messages, isLoading, isTranscribing, handlePlayTTS]);
@@ -127,6 +129,15 @@ export const ChatContainer = ({
         sendMessageHandler(inputText.trim());
       }
       setInputText('');
+    }
+  };
+
+  /**
+   * Handles quick reply option button selection.
+   */
+  const handleSelectChip = (selectedOption) => {
+    if (typeof sendMessageHandler === 'function' && !isLoading && !isTranscribing) {
+      sendMessageHandler(selectedOption);
     }
   };
 
@@ -212,6 +223,15 @@ export const ChatContainer = ({
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span>{micError}</span>
         </div>
+      )}
+
+      {/* Quick Reply Suggestion Chips */}
+      {!isLoading && !isTranscribing && !isRecording && (
+        <QuickReplyChips
+          options={quickOptions}
+          onSelectOption={handleSelectChip}
+          disabled={isLoading || isTranscribing}
+        />
       )}
 
       {/* Input Action Controls Bar */}

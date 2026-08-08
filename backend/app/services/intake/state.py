@@ -3,8 +3,8 @@
 Session State Machine Engine for ClinicalPrep AI v2.0.
 
 Purpose:
-    Manages non-destructive slot merging, monotonic step progression calculation, 
-    automatic fallback brief compilation, and output response construction.
+    Manages non-destructive slot merging, monotonic step progression, 
+    automatic fallback brief compilation, and terminates question loops cleanly.
 """
 
 from typing import Dict, Any, Optional
@@ -17,10 +17,7 @@ from app.services.intake.schemas import (
 
 
 def generate_fallback_summary(session: IntakeSessionState) -> str:
-    """
-    Synthesizes a clean Markdown summary brief directly from collected session state memory
-    if the LLM omits the `summary_brief` string in its response payload.
-    """
+    """Synthesizes a clean Markdown summary brief directly from collected session state memory."""
     demo = session.demographics
     clin = session.clinical_slots
 
@@ -49,7 +46,7 @@ a. {clin.patient_goals or 'None reported'}
 
 
 def merge_slots(current_state: IntakeSessionState, extracted: ExtractionResult) -> IntakeSessionState:
-    """Non-destructively merges newly extracted slots into active session memory."""
+    """Non-destructively merges newly extracted demographic and clinical slots into session state."""
     if extracted.demographics:
         for field, value in extracted.demographics.model_dump().items():
             if value is not None and value != "":
@@ -64,7 +61,9 @@ def merge_slots(current_state: IntakeSessionState, extracted: ExtractionResult) 
 
 
 def calculate_current_step(state: IntakeSessionState) -> int:
-    """Calculates intake stage progression monotonically from Step 1 through Step 5."""
+    """
+    Calculates intake stage progression monotonically from Step 1 through Step 5.
+    """
     demo = state.demographics
     clin = state.clinical_slots
 
@@ -73,7 +72,6 @@ def calculate_current_step(state: IntakeSessionState) -> int:
     if state.is_completed or bool(state.summary_brief):
         return 5
 
-    # Check if final slot (patient goals) or all core clinical slots are populated
     if clin.chief_complaint and clin.onset_duration and clin.severity and clin.patient_goals:
         return 5
 
@@ -93,7 +91,7 @@ def update_session_state(
     current_state: Optional[Dict[str, Any]], 
     extracted_result: ExtractionResult
 ) -> IntakeStepResponse:
-    """Orchestrates session state updates across conversation turns and guarantees summary generation."""
+    """Orchestrates state updates and guarantees loop termination upon Step 4 answer."""
     if current_state and isinstance(current_state, dict) and len(current_state) > 0:
         session = IntakeSessionState.model_validate(current_state)
     else:
@@ -115,29 +113,20 @@ def update_session_state(
     if extracted_result.is_emergency:
         session.is_emergency = True
 
-    # 2. Recalculate step progression
+    # 2. Calculate progression step & termination
     session.current_step = calculate_current_step(session)
+    clin = session.clinical_slots
+    has_goals = clin.patient_goals is not None and clin.patient_goals != ""
 
-    # 3. Detect completion triggers
-    next_q = extracted_result.next_question or ""
-    is_completion_phrase = "Thank you. Your clinical intake details have been recorded" in next_q
-
-    if (
-        extracted_result.summary_brief or 
-        session.summary_brief or 
-        session.current_step == 5 or 
-        is_completion_phrase
-    ):
+    if has_goals or (clin.chief_complaint and clin.onset_duration and clin.severity and clin.patient_goals):
         session.is_completed = True
         session.current_step = 5
+        if not session.summary_brief:
+            session.summary_brief = extracted_result.summary_brief or generate_fallback_summary(session)
 
-        # Guarantee summary_brief exists
-        if extracted_result.summary_brief:
-            session.summary_brief = extracted_result.summary_brief
-        elif not session.summary_brief:
-            session.summary_brief = generate_fallback_summary(session)
-
-        next_q = "Thank you. Your clinical intake details have been recorded."
+    next_q = "Thank you. Your clinical intake details have been recorded." if session.is_completed else (
+        extracted_result.next_question or "Could you please elaborate?"
+    )
 
     quick_opts = [] if session.is_completed else (extracted_result.quick_options or [])
 

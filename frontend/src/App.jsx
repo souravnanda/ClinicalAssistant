@@ -3,9 +3,8 @@
  * Root Application Component for ClinicalPrep AI v2.0.
  * 
  * Purpose:
- *   Manages top-level application state, conversation turn memory, 
- *   intake step progress tracking, dynamic quick-reply chip updates, 
- *   emergency modal triggers, and renders the Summary Card upon completion.
+ *   Manages top-level application state, mode switching (Chat vs Voice), 
+ *   conversation turn memory, intake step progress tracking, and FastAPI endpoints.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -16,9 +15,10 @@ import EmergencyModal from './components/EmergencyModal';
 import { sendIntakeStep, checkBackendHealth } from './services/api';
 
 export const App = () => {
-  // Session State & Quick Options Memory
+  // Session State, Interaction Mode, and Quick Options Memory
   const [sessionState, setSessionState] = useState(null);
   const [quickOptions, setQuickOptions] = useState([]);
+  const [interactionMode, setInteractionMode] = useState('chat'); // 'chat' or 'voice'
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -45,7 +45,7 @@ export const App = () => {
   }, []);
 
   /**
-   * Asynchronously submits patient messages to the FastAPI Pydantic intake engine.
+   * Submits patient messages (typed or transcribed) to the FastAPI Pydantic intake engine.
    */
   const handleSendMessage = async (userText) => {
     if (!userText || isLoading) return;
@@ -119,10 +119,12 @@ export const App = () => {
             quickOptions={quickOptions}
             onSendMessage={handleSendMessage}
             isLoading={isLoading}
+            mode={interactionMode}
+            onModeChange={setInteractionMode}
           />
         </div>
 
-        {/* Post-Intake Summary Doctor Brief Card (Renders whenever intake is completed) */}
+        {/* Post-Intake Summary Doctor Brief Card */}
         {isCompleted && (
           <div className="mt-4 transition-all duration-300">
             <SummaryCard

@@ -8,7 +8,6 @@ Purpose:
 """
 
 from app.services.intake.schemas import (
-    DemographicsSlots,
     PatientDemographics,
     ClinicalSlots,
     ExtractionResult,
@@ -27,7 +26,6 @@ from app.services.intake.state import (
 )
 
 __all__ = [
-    "DemographicsSlots",
     "PatientDemographics",
     "ClinicalSlots",
     "ExtractionResult",

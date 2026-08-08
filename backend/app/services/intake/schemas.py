@@ -45,9 +45,12 @@ class ClinicalSlots(BaseModel):
     """
     chief_complaint: Optional[str] = None
     onset_duration: Optional[str] = None
+    quality: Optional[str] = None
+    region_radiation: Optional[str] = None
     severity: Optional[str] = None
     pattern_triggers: Optional[str] = None
     current_medications: Optional[str] = None
+    allergies: Optional[str] = None
     patient_goals: Optional[str] = None
 
 
@@ -67,8 +70,24 @@ class ExtractionResult(BaseModel):
     clinical_slots: Optional[ClinicalSlots] = None
     next_question: Optional[str] = None
     is_emergency: bool = False
+    red_flag_reason: Optional[str] = None
     summary_brief: Optional[str] = None
     quick_options: List[str] = Field(default_factory=list)
+    # Explicit completion signal from the model itself. Don't rely solely on
+    # patient_goals being non-empty — a patient declining ("nothing", "no
+    # questions") is a valid, complete answer but may not populate that slot
+    # with text. This flag lets the model say "intake is done" regardless of
+    # exactly how the goals slot got filled.
+    intake_complete: bool = False
+    # Which of the 5 UI-facing stages the NEXT question (the one just generated)
+    # belongs to. Must match Header.jsx's STAGES exactly:
+    #   1 = Demographics & Reason   2 = Symptom Details
+    #   3 = Interventions & Meds    4 = Doctor Questions
+    #   5 = Doctor Brief (intake complete)
+    # This is the primary driver of the progress bar — far more reliable than
+    # reverse-engineering the stage from which slots happen to be filled, since
+    # the model already knows which phase it's in when it writes the question.
+    current_phase: Optional[int] = None
 
 
 class IntakeSessionState(BaseModel):
@@ -91,6 +110,10 @@ class IntakeSessionState(BaseModel):
     summary_brief: Optional[str] = None
     demographics: PatientDemographics = Field(default_factory=PatientDemographics)
     clinical_slots: ClinicalSlots = Field(default_factory=ClinicalSlots)
+    last_question_asked: Optional[str] = None
+    # Rolling window of recent turns, e.g. [{"role": "assistant"/"user", "content": "..."}].
+    # Capped in state.py to keep the prompt payload small.
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class IntakeStepRequest(BaseModel):

@@ -5,12 +5,18 @@
  * Purpose:
  *   Serves as the primary conversation interface supporting distinct Text Chat and 
  *   Voice Modes. In Text Chat Mode, voice controls and Read Aloud buttons are hidden.
+ *
+ *   TTS playback is NOT triggered from here — App.jsx pre-fetches the audio and
+ *   reveals the assistant's text bubble at the same moment it starts playing, so
+ *   the two stay in sync instead of text rendering a beat ahead of the voice.
+ *   This component only reacts to `isSpeaking` (to disable the mic while the
+ *   assistant is talking) and exposes manual "Read Aloud" replay via a callback.
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, Send, Volume2, Square, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Mic, Send, Volume2, Square, Loader2, AlertCircle, RotateCcw, Download, X } from 'lucide-react';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
-import { transcribeAudio, synthesizeSpeech } from '../services/api';
+import { transcribeAudio } from '../services/api';
 import QuickReplyChips from './QuickReplyChips';
 import ModeToggle from './ModeToggle';
 
@@ -21,17 +27,23 @@ export const ChatContainer = ({
   handleSendMessage,
   isLoading,
   mode = 'chat',
-  onModeChange
+  onModeChange,
+  isSpeaking = false,
+  onReadAloud,
+  isCompleted = false,
+  showRestartConfirm = false,
+  onRequestRestart,
+  onCancelRestart,
+  onConfirmRestart,
+  onDownloadPdf,
+  isDownloadingPdf = false,
 }) => {
   const sendMessageHandler = onSendMessage || handleSendMessage;
 
   const [inputText, setInputText] = useState('');
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
   const messagesEndRef = useRef(null);
-  const audioPlayerRef = useRef(null);
-  const lastSpokenMessageRef = useRef(null);
 
   const {
     isRecording,
@@ -47,52 +59,6 @@ export const ChatContainer = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading, isTranscribing]);
-
-  /**
-   * Synthesizes text prompt into audio stream via backend TTS service.
-   */
-  const handlePlayTTS = useCallback(async (textToSpeak) => {
-    if (!textToSpeak) return;
-
-    try {
-      if (isPlayingAudio && audioPlayerRef.current) {
-        audioPlayerRef.current.pause();
-        setIsPlayingAudio(false);
-        return;
-      }
-
-      setIsPlayingAudio(true);
-      const audioUrl = await synthesizeSpeech(textToSpeak);
-
-      if (audioPlayerRef.current) {
-        audioPlayerRef.current.src = audioUrl;
-        audioPlayerRef.current.play().catch((err) => {
-          console.warn('Browser autoplay policy restricted audio play:', err);
-          setIsPlayingAudio(false);
-        });
-      }
-    } catch (err) {
-      console.error('TTS Audio Playback Error:', err);
-      setIsPlayingAudio(false);
-    }
-  }, [isPlayingAudio]);
-
-  // Auto-play audio ONLY when Voice Mode is active
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    
-    if (
-      mode === 'voice' &&
-      lastMessage && 
-      lastMessage.role === 'assistant' && 
-      !isLoading && 
-      !isTranscribing &&
-      lastSpokenMessageRef.current !== lastMessage.content
-    ) {
-      lastSpokenMessageRef.current = lastMessage.content;
-      handlePlayTTS(lastMessage.content);
-    }
-  }, [mode, messages, isLoading, isTranscribing, handlePlayTTS]);
 
   // Process recorded audio blob in Voice Mode
   useEffect(() => {
@@ -151,18 +117,12 @@ export const ChatContainer = ({
 
   return (
     <div className="flex flex-col h-full max-w-4xl mx-auto bg-white rounded-xl shadow-md overflow-hidden border border-slate-200">
-      {/* Hidden Audio Element for Voice Mode */}
-      <audio
-        ref={audioPlayerRef}
-        onEnded={() => setIsPlayingAudio(false)}
-        onError={() => setIsPlayingAudio(false)}
-        className="hidden"
-      />
-
-      {/* Mode Toggle Header Bar */}
-      <div className="bg-slate-50 border-b border-slate-200 py-1 px-4">
-        <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isLoading || isRecording || isTranscribing} />
-      </div>
+      {/* Mode Toggle Header Bar — hidden once intake is complete, nothing left to switch to */}
+      {!isCompleted && (
+        <div className="bg-slate-50 border-b border-slate-200 py-1 px-4">
+          <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isLoading || isRecording || isTranscribing || isSpeaking} />
+        </div>
+      )}
 
       {/* Chat Messages Feed */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -183,10 +143,10 @@ export const ChatContainer = ({
                 <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
                 {/* Read Aloud Button: ONLY rendered when in VOICE MODE */}
-                {!isUser && mode === 'voice' && (
+                {!isUser && mode === 'voice' && typeof onReadAloud === 'function' && (
                   <button
                     type="button"
-                    onClick={() => handlePlayTTS(msg.content)}
+                    onClick={() => onReadAloud(msg.content)}
                     className="mt-2 text-slate-500 hover:text-amber-800 transition-colors flex items-center gap-1 text-xs font-medium"
                     title="Read Aloud"
                   >
@@ -202,11 +162,13 @@ export const ChatContainer = ({
           );
         })}
 
-        {/* Slot Analysis Indicator */}
+        {/* Slot Analysis Indicator — label adapts to mode; this covers the ENTIRE
+            wait (LLM response + TTS fetch in voice mode) so nothing appears until
+            text and audio are both ready to start together. */}
         {isLoading && (
           <div className="flex items-center gap-2 text-slate-500 text-xs italic p-2">
             <Loader2 className="w-4 h-4 animate-spin text-amber-800" />
-            Analyzing intake slots...
+            {mode === 'voice' ? 'Preparing response...' : 'Analyzing intake slots...'}
           </div>
         )}
 
@@ -218,11 +180,19 @@ export const ChatContainer = ({
           </div>
         )}
 
+        {/* Speaking Indicator — lets the patient see the assistant is still talking */}
+        {isSpeaking && mode === 'voice' && (
+          <div className="flex items-center gap-2 text-amber-800 text-xs font-medium p-2 bg-amber-50 rounded-lg border border-amber-200">
+            <Volume2 className="w-4 h-4 animate-pulse" />
+            Speaking...
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       {/* Mic Error Banner */}
-      {micError && mode === 'voice' && (
+      {micError && mode === 'voice' && !isCompleted && (
         <div className="bg-red-50 text-red-600 text-xs p-2.5 px-4 border-t border-red-200 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span>{micError}</span>
@@ -230,7 +200,7 @@ export const ChatContainer = ({
       )}
 
       {/* Quick Reply Chips */}
-      {!isLoading && !isTranscribing && !isRecording && (
+      {!isCompleted && !isLoading && !isTranscribing && !isRecording && !isSpeaking && (
         <QuickReplyChips
           options={quickOptions}
           onSelectOption={handleSelectChip}
@@ -240,7 +210,57 @@ export const ChatContainer = ({
 
       {/* Input Action Bar */}
       <div className="p-3 bg-slate-50 border-t border-slate-200">
-        {mode === 'voice' ? (
+        {isCompleted ? (
+          /* ==================== POST-COMPLETION ACTION BAR ==================== */
+          showRestartConfirm ? (
+            <div className="w-full flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+              <span className="text-xs font-medium text-amber-900">
+                Restart the intake? Your current answers will be cleared.
+              </span>
+              <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                <button
+                  type="button"
+                  onClick={onConfirmRestart}
+                  className="bg-amber-800 hover:bg-amber-900 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Yes, restart
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelRestart}
+                  className="text-slate-500 hover:text-slate-700 p-1.5"
+                  title="Cancel"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onRequestRestart}
+                className="flex-1 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-medium text-xs rounded-xl transition-all flex items-center justify-center gap-2"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Restart Intake</span>
+              </button>
+              <button
+                type="button"
+                onClick={onDownloadPdf}
+                disabled={isDownloadingPdf}
+                className="flex-1 py-2.5 bg-amber-800 hover:bg-amber-900 text-white font-medium text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDownloadingPdf ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{isDownloadingPdf ? 'Generating PDF...' : 'Download Intake PDF'}</span>
+              </button>
+            </div>
+          )
+        ) : mode === 'voice' ? (
           /* ==================== VOICE MODE INTERFACE ==================== */
           <div className="flex items-center justify-center py-2">
             {isRecording ? (
@@ -263,11 +283,11 @@ export const ChatContainer = ({
               <button
                 type="button"
                 onClick={startRecording}
-                disabled={isLoading || isTranscribing}
+                disabled={isLoading || isTranscribing || isSpeaking}
                 className="w-full py-3 bg-amber-800 hover:bg-amber-900 text-white font-medium text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Mic className="w-4 h-4" />
-                <span>Tap Microphone to Record Voice Response</span>
+                <span>{isSpeaking ? 'Assistant is speaking...' : 'Tap Microphone to Record Voice Response'}</span>
               </button>
             )}
           </div>

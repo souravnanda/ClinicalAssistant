@@ -15,9 +15,13 @@ const STAGES = [
   'Doctor Brief'
 ];
 
-export default function Header({ currentStep = 1, isEmergency = false }) {
-  const activeStep = Math.min(Math.max(currentStep, 1), 5);
-  const progressPercent = (activeStep / 5) * 100;
+export default function Header({ currentStep = 1, isCompleted = false, isEmergency = false }) {
+  // Safety net: if the backend ever reports is_completed without current_step
+  // having caught up to 5 (e.g. an edge case in slot-based progression), the
+  // progress bar must still show the conversation as finished rather than
+  // stalling at a stale step. Completion always wins.
+  const activeStep = isCompleted ? 5 : Math.min(Math.max(currentStep, 1), 5);
+  const progressPercent = isCompleted ? 100 : (activeStep / 5) * 100;
 
   return (
     <header className="sticky top-0 z-30 bg-[#FFF8F0]/95 backdrop-blur-md border-b border-brand-200 shadow-sm px-4 py-3 transition-all">
@@ -50,8 +54,8 @@ export default function Header({ currentStep = 1, isEmergency = false }) {
         </div>
 
         <div className="flex justify-between items-center text-[11px] font-medium text-brand-700">
-          <span>Step {activeStep} of 5: {STAGES[activeStep - 1]}</span>
-          <span>{progressPercent}% Complete</span>
+          <span>{isCompleted ? 'Intake Complete' : `Step ${activeStep} of 5: ${STAGES[activeStep - 1]}`}</span>
+          <span>{Math.round(progressPercent)}% Complete</span>
         </div>
       </div>
     </header>

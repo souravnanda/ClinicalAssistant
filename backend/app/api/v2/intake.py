@@ -29,7 +29,11 @@ async def process_intake_step(request: Request, payload: IntakeStepRequest) -> I
         current_state = payload.session_state
 
         extracted_result = await extract_clinical_slots(user_message=user_message, current_state=current_state)
-        updated_state = update_session_state(current_state=current_state, extracted_result=extracted_result)
+        updated_state = update_session_state(
+            current_state=current_state,
+            extracted_result=extracted_result,
+            user_message=user_message,
+        )
 
         return updated_state
 

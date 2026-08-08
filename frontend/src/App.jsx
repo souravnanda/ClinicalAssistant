@@ -5,7 +5,7 @@
  * Purpose:
  *   Manages top-level application state, conversation turn memory, 
  *   intake step progress tracking, dynamic quick-reply chip updates, 
- *   emergency modal triggers, and communicates directly with the FastAPI backend.
+ *   emergency modal triggers, and renders the Summary Card upon completion.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -46,7 +46,6 @@ export const App = () => {
 
   /**
    * Asynchronously submits patient messages to the FastAPI Pydantic intake engine.
-   * Updates conversation history, extracted session state, quick options, and checks for red flags.
    */
   const handleSendMessage = async (userText) => {
     if (!userText || isLoading) return;
@@ -103,7 +102,7 @@ export const App = () => {
       <Header currentStep={currentStep} isCompleted={isCompleted} />
 
       {/* Main Container Workspace */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 flex flex-col gap-4">
+      <main className="flex-1 max-w-5xl w-full mx-auto p-4 flex flex-col gap-4 pb-12">
         {/* Backend Connection Warning Banner */}
         {backendStatus === 'disconnected' && (
           <div className="bg-amber-50 border border-amber-300 text-amber-800 px-4 py-2 rounded-lg text-xs flex items-center justify-between">
@@ -114,7 +113,7 @@ export const App = () => {
         )}
 
         {/* Primary Intake Chat Stream */}
-        <div className="flex-1 min-h-[500px]">
+        <div className="flex-1 min-h-[450px]">
           <ChatContainer
             messages={messages}
             quickOptions={quickOptions}
@@ -123,10 +122,16 @@ export const App = () => {
           />
         </div>
 
-        {/* Post-Intake Summary Doctor Brief Card (Renders when is_completed = true) */}
-        {isCompleted && summaryBrief && (
-          <div className="mt-4">
-            <SummaryCard summaryBrief={summaryBrief} />
+        {/* Post-Intake Summary Doctor Brief Card (Renders whenever intake is completed) */}
+        {isCompleted && (
+          <div className="mt-4 transition-all duration-300">
+            <SummaryCard
+              summaryBrief={
+                summaryBrief ||
+                "### Patient Pre-Visit Summary\nYour clinical intake details have been recorded."
+              }
+              sessionState={sessionState}
+            />
           </div>
         )}
       </main>
